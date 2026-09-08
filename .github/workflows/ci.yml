@@ -362,7 +362,11 @@ jobs:
               echo "## ci-ok: failed"
               echo
               echo "These jobs failed:"
-              echo "$failed" | sed 's/^/- /'
+              # A read loop rather than sed, so shellcheck's SC2001 stays
+              # satisfied and an empty list cannot emit a stray bullet.
+              while IFS= read -r job; do
+                [ -n "$job" ] && echo "- $job"
+              done <<<"$failed"
             } >>"$GITHUB_STEP_SUMMARY"
             exit 1
           fi
