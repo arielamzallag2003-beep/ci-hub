@@ -1,0 +1,30 @@
+# Build output. The hygiene job warns when these are committed, so the hub
+# must not commit them itself.
+bin/
+obj/
+build/
+out/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+
+# Test fixture build products: fixtures are sources only, built fresh in CI.
+tests/fixtures/**/CMakeCache.txt
+tests/fixtures/**/CMakeFiles/
+tests/fixtures/cpp-make/app
+tests/fixtures/cpp-cmake/build/
+
+# Local tooling
+.vs/
+.vscode/
+.idea/
+*.log
+
+# Exception: the unity-like fixture deliberately commits generated .csproj
+# fragments under obj/ and Build~/. They are the thing the detector must learn
+# to ignore, so they have to survive into the repository.
+!tests/fixtures/unity-like/**/obj/
+!tests/fixtures/unity-like/**/obj/**
+!tests/fixtures/unity-like/**/Build~/
+!tests/fixtures/unity-like/**/Build~/**

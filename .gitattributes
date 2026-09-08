@@ -1,0 +1,23 @@
+# Normalise to LF in the repository.
+* text=auto eol=lf
+
+# These MUST be LF in the working tree as well. A shell script or an action
+# checked out with CRLF fails on a Linux runner with "\r: command not found",
+# which is exactly the kind of unrelated red badge this hub exists to prevent.
+*.sh      text eol=lf
+*.bash    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.py      text eol=lf
+
+# PowerShell is run by the user on Windows; CRLF is correct there.
+*.ps1     text eol=crlf
+
+# Never normalise binaries.
+*.png     binary
+*.jpg     binary
+*.gif     binary
+*.zip     binary
+*.dll     binary
+*.exe     binary
+*.pdb     binary

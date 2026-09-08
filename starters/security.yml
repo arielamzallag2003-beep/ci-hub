@@ -1,0 +1,22 @@
+# Copy to .github/workflows/security.yml in your project.
+#
+# The slow checks, on a weekly schedule instead of every push: full-history
+# secret scanning and OpenSSF Scorecard. Read-only.
+
+name: Security
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    uses: arielamzallag2003-beep/ci-hub/.github/workflows/security.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write

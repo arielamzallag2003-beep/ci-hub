@@ -1,0 +1,113 @@
+name: .NET build
+description: >-
+  Restore, build and test a .NET solution or project, then verify formatting
+  without ever modifying the source.
+
+inputs:
+  project:
+    description: Path to the .sln, .slnx or .csproj to build.
+    required: true
+  dotnet-version:
+    description: SDK version. Empty means "use global.json if present, else 8.0.x".
+    required: false
+    default: ""
+  artifact-retention-days:
+    required: false
+    default: "7"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up .NET
+      uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      with:
+        dotnet-version: ${{ inputs.dotnet-version || '8.0.x' }}
+        # A project that pins its SDK in global.json must win over our default,
+        # otherwise the build silently uses the wrong toolchain.
+        global-json-file: ${{ hashFiles('global.json') != '' && 'global.json' || '' }}
+
+    # Keyed on the project files, so a dependency change busts the cache and
+    # nothing else does.
+    - name: Cache NuGet packages
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.fsproj', '**/Directory.Packages.props', '**/packages.lock.json') }}
+        restore-keys: ${{ runner.os }}-nuget-
+
+    - name: Restore
+      shell: bash
+      run: dotnet restore "${{ inputs.project }}"
+
+    - name: Build
+      shell: bash
+      run: dotnet build "${{ inputs.project }}" --configuration Release --no-restore
+
+    - name: Test
+      shell: bash
+      run: |
+        # A solution with no test project is not a failure. Detect that case
+        # rather than letting "dotnet test" decide what it means.
+        if dotnet test "${{ inputs.project }}" --configuration Release --no-build \
+          --logger "trx;LogFileName=results.trx" --results-directory "$RUNNER_TEMP/test-results" \
+          --verbosity minimal; then
+          echo "Tests passed." >>"$GITHUB_STEP_SUMMARY"
+        else
+          status=$?
+          if [ ! -d "$RUNNER_TEMP/test-results" ] || [ -z "$(ls -A "$RUNNER_TEMP/test-results" 2>/dev/null)" ]; then
+            echo "No test projects were found in \`${{ inputs.project }}\` - skipping." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$status"
+        fi
+
+    - name: Upload test results
+      if: always() && hashFiles('${{ runner.temp }}/test-results/**') != ''
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: test-results-dotnet-${{ runner.os }}
+        path: ${{ runner.temp }}/test-results
+        retention-days: ${{ inputs.artifact-retention-days }}
+
+    # --verify-no-changes is the whole point: it reports without writing.
+    - name: Check formatting
+      id: fmt
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        if dotnet format "${{ inputs.project }}" --verify-no-changes --verbosity diagnostic 2>&1 | tee "$RUNNER_TEMP/format.log"; then
+          echo "violations=0" >>"$GITHUB_OUTPUT"
+          echo "\`dotnet format\`: clean." >>"$GITHUB_STEP_SUMMARY"
+        else
+          echo "violations=1" >>"$GITHUB_OUTPUT"
+          # Produce the patch the author can apply, then restore the tree.
+          dotnet format "${{ inputs.project }}" --verbosity quiet || true
+          git diff >"$RUNNER_TEMP/format.patch" || true
+          {
+            echo "### dotnet format"
+            echo
+            echo "Formatting differences were found. Nothing was changed in your"
+            echo "repository - download the \`format-patch-dotnet\` artifact and apply it:"
+            echo
+            echo '```bash'
+            echo "git apply format.patch"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          git checkout -- . || true
+        fi
+
+    - name: Upload the format patch
+      if: steps.fmt.outputs.violations == '1'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: format-patch-dotnet
+        path: ${{ runner.temp }}/format.patch
+        retention-days: ${{ inputs.artifact-retention-days }}
+        if-no-files-found: ignore
+
+    - name: Fail if formatting is wrong
+      if: steps.fmt.outputs.violations == '1'
+      shell: bash
+      run: |
+        echo "dotnet format reported differences. See the job summary."
+        exit 1

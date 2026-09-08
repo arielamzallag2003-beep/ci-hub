@@ -1,0 +1,25 @@
+# Copy to .github/workflows/release.yml in your project.
+#
+# Also identical for every technology. It runs only when YOU push a version
+# tag; it never creates one. The release is created as a draft for you to
+# review and publish.
+#
+#   git tag v1.0.0
+#   git push origin v1.0.0
+
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: arielamzallag2003-beep/ci-hub/.github/workflows/release.yml@v1
+    permissions:
+      contents: write # required to create the Release. Nothing else writes.
+    with:
+      draft: true

@@ -1,0 +1,77 @@
+name: Detect stack
+description: >-
+  Fingerprint a repository and report which build systems, engines and analysis
+  languages are present. Never fails: an unrecognised repository is reported as
+  the "unknown" stack, not as an error.
+
+inputs:
+  working-directory:
+    description: Directory to fingerprint.
+    required: false
+    default: "."
+  override-file:
+    description: Path to the project's optional CI override file.
+    required: false
+    default: .github/ci.yml
+
+outputs:
+  stacks:
+    description: JSON array of every stack detected, e.g. ["dotnet","unity"].
+    value: ${{ steps.detect.outputs.stacks }}
+  has_cpp:
+    description: Whether a buildable C++ project was found.
+    value: ${{ steps.detect.outputs.has_cpp }}
+  cpp_build_system:
+    description: '"cmake" or "make".'
+    value: ${{ steps.detect.outputs.cpp_build_system }}
+  cpp_root:
+    description: Directory holding the C++ build definition.
+    value: ${{ steps.detect.outputs.cpp_root }}
+  has_dotnet:
+    description: Whether a buildable .NET solution or project was found.
+    value: ${{ steps.detect.outputs.has_dotnet }}
+  dotnet_project:
+    description: The selected .sln or .csproj path.
+    value: ${{ steps.detect.outputs.dotnet_project }}
+  has_python:
+    description: Whether Python sources were found.
+    value: ${{ steps.detect.outputs.has_python }}
+  has_node:
+    description: Whether a package.json was found.
+    value: ${{ steps.detect.outputs.has_node }}
+  has_rust:
+    description: Whether a Cargo.toml was found.
+    value: ${{ steps.detect.outputs.has_rust }}
+  has_gradle:
+    description: Whether a Gradle build was found.
+    value: ${{ steps.detect.outputs.has_gradle }}
+  engine:
+    description: '"unreal", "unity", "godot" or "none".'
+    value: ${{ steps.detect.outputs.engine }}
+  codeql_languages:
+    description: JSON array of CodeQL languages, restricted to those CodeQL supports.
+    value: ${{ steps.detect.outputs.codeql_languages }}
+  has_codeql:
+    description: Whether any CodeQL-supported language was found.
+    value: ${{ steps.detect.outputs.has_codeql }}
+  os_matrix:
+    description: '"linux" or "full", after applying any override.'
+    value: ${{ steps.detect.outputs.os_matrix }}
+  override_applied:
+    description: Whether a project override file was read.
+    value: ${{ steps.detect.outputs.override_applied }}
+  reasons:
+    description: Human-readable explanation of every decision, for the job summary.
+    value: ${{ steps.detect.outputs.reasons }}
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      env:
+        DETECT_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        bash "${{ github.action_path }}/detect.sh" \
+          "${{ inputs.working-directory }}" \
+          "${{ inputs.override-file }}"

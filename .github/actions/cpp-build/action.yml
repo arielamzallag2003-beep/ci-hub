@@ -1,0 +1,132 @@
+name: C++ build
+description: >-
+  Configure, build and test a C++ project using CMake or a Makefile, then check
+  formatting without ever modifying the source.
+
+inputs:
+  build-system:
+    description: '"cmake" or "make".'
+    required: true
+  source-dir:
+    description: Directory containing CMakeLists.txt or the Makefile.
+    required: false
+    default: "."
+  build-type:
+    required: false
+    default: Release
+  artifact-retention-days:
+    required: false
+    default: "7"
+
+runs:
+  using: composite
+  steps:
+    # ccache turns a rebuild of unchanged translation units into a cache hit,
+    # which is the single biggest saving available on a C++ matrix.
+    - name: Enable ccache
+      if: runner.os != 'Windows'
+      uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1
+      with:
+        key: ${{ github.repository }}-${{ runner.os }}-cpp
+        max-size: 300M
+
+    - name: Configure (CMake)
+      if: inputs.build-system == 'cmake'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE="${{ inputs.build-type }}"
+
+    - name: Build (CMake)
+      if: inputs.build-system == 'cmake'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: cmake --build build --config "${{ inputs.build-type }}" --parallel
+
+    - name: Test (CMake)
+      if: inputs.build-system == 'cmake'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        # A project with no registered tests is a project without tests yet,
+        # not a broken one. --no-tests=ignore keeps that case green.
+        ctest --test-dir build --build-config "${{ inputs.build-type }}" \
+          --output-on-failure --no-tests=ignore
+
+    - name: Build (Makefile)
+      if: inputs.build-system == 'make'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: make
+
+    - name: Test (Makefile)
+      if: inputs.build-system == 'make'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        # Only invoke a "test" target that actually exists; "make test" on a
+        # Makefile without one fails with "No rule to make target".
+        if grep -qE '^test[[:space:]]*:' Makefile 2>/dev/null ||
+          grep -qE '^test[[:space:]]*:' makefile 2>/dev/null; then
+          make test
+        else
+          echo "No 'test' target in the Makefile - skipping." >>"$GITHUB_STEP_SUMMARY"
+        fi
+
+    # Formatting is reported, never applied. The patch is uploaded so the
+    # author can run `git apply format.patch` themselves. No bot rewrites code.
+    - name: Check formatting
+      id: fmt
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        if [ ! -f .clang-format ]; then
+          echo "No .clang-format in this project - skipping the format check." >>"$GITHUB_STEP_SUMMARY"
+          echo "violations=0" >>"$GITHUB_OUTPUT"
+          exit 0
+        fi
+        mapfile -t files < <(git ls-files "*.c" "*.cc" "*.cpp" "*.cxx" "*.h" "*.hh" "*.hpp" 2>/dev/null)
+        if [ "${#files[@]}" -eq 0 ]; then
+          echo "violations=0" >>"$GITHUB_OUTPUT"
+          exit 0
+        fi
+        clang-format -i "${files[@]}"
+        if git diff --quiet; then
+          echo "violations=0" >>"$GITHUB_OUTPUT"
+          echo "clang-format: clean." >>"$GITHUB_STEP_SUMMARY"
+        else
+          git diff >"$RUNNER_TEMP/format.patch"
+          count=$(git diff --name-only | wc -l | tr -d ' ')
+          echo "violations=$count" >>"$GITHUB_OUTPUT"
+          git diff --name-only | while read -r f; do
+            echo "::error file=$f::clang-format violation. Download the format.patch artifact and run 'git apply format.patch'."
+          done
+          {
+            echo "### clang-format"
+            echo
+            echo "$count file(s) are not formatted. Nothing was changed in your"
+            echo "repository - download the \`format.patch\` artifact and apply it:"
+            echo
+            echo '```bash'
+            echo "git apply format.patch"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          # Restore the tree so nothing downstream sees modified sources.
+          git checkout -- .
+        fi
+
+    - name: Upload the format patch
+      if: steps.fmt.outputs.violations != '0' && steps.fmt.outputs.violations != ''
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: format-patch-cpp
+        path: ${{ runner.temp }}/format.patch
+        retention-days: ${{ inputs.artifact-retention-days }}
+
+    - name: Fail if formatting is wrong
+      if: steps.fmt.outputs.violations != '0' && steps.fmt.outputs.violations != ''
+      shell: bash
+      run: |
+        echo "clang-format found ${{ steps.fmt.outputs.violations }} unformatted file(s)."
+        exit 1

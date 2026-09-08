@@ -1,0 +1,25 @@
+# Copy to .github/ci.yml in your project ONLY when auto-detection gets it
+# wrong. Every key is optional; anything you leave out stays auto-detected.
+#
+# Full reference: docs/OVERRIDES.md
+
+# Which runners to build on.
+#   linux   only ubuntu-latest (default, cheapest)
+#   full    ubuntu + windows + macos. Windows costs 2x minutes, macOS 10x.
+#   auto    linux on pull requests, full on main and tags
+os-matrix: linux
+
+stacks:
+  cpp:
+    # Turn the C++ build off entirely, e.g. when the only CMakeLists.txt in
+    # the repository belongs to a vendored dependency.
+    enabled: false
+    # Or point it at the right directory and build system.
+    # root: engine
+    # build-system: cmake
+
+  dotnet:
+    enabled: true
+    # Pin the exact solution or project to build. Useful when a repository
+    # contains several and the shallowest one is not the one you want.
+    project: plugin/MyTool.csproj

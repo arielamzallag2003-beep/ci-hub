@@ -1,0 +1,373 @@
+name: CI
+
+# The single entrypoint every project calls. It fingerprints the repository,
+# runs only the jobs that make sense for what it found, and reports through one
+# terminal gate job (ci-ok) that is the required status check everywhere.
+#
+# Two rules this file must never break:
+#   1. It requires no secrets. Fork pull requests therefore run with a
+#      read-only token and have nothing to exfiltrate.
+#   2. It never writes to the caller's repository. No commits, no tags, no
+#      merges, no pushes. guardrails.yml enforces this mechanically.
+
+on:
+  workflow_call:
+    inputs:
+      os-matrix:
+        description: >-
+          "linux" (default), "full" for Linux + Windows + macOS, or "auto" to
+          use Linux on pull requests and escalate to full on main and tags.
+          Leave empty to honour the project's own .github/ci.yml override.
+          Windows costs 2x and macOS 10x the Actions minutes of Linux, so this
+          stays opt-in rather than defaulting to a wide matrix.
+        type: string
+        required: false
+        default: ""
+      dotnet-version:
+        description: .NET SDK version. Empty means "use global.json, else 8.0.x".
+        type: string
+        required: false
+        default: ""
+      cmake-build-type:
+        type: string
+        required: false
+        default: Release
+      run-security:
+        description: Run secret scanning and dependency review.
+        type: boolean
+        required: false
+        default: true
+      run-codeql:
+        description: Run CodeQL for whichever supported languages were detected.
+        type: boolean
+        required: false
+        default: true
+      artifact-retention-days:
+        description: Kept short by default to stay clear of the storage quota.
+        type: number
+        required: false
+        default: 7
+      timeout-minutes:
+        description: Ceiling for each build job. Stops a hung job eating quota.
+        type: number
+        required: false
+        default: 20
+      override-file:
+        type: string
+        required: false
+        default: .github/ci.yml
+      working-directory:
+        description: >-
+          Subdirectory to treat as the project root. Defaults to the repository
+          root. Set it for a monorepo whose buildable project is not at the top
+          level; the hub's own e2e tests use it to point CI at a fixture.
+        type: string
+        required: false
+        default: "."
+    outputs:
+      stacks:
+        description: JSON array of the stacks detected in the caller.
+        value: ${{ jobs.detect.outputs.stacks }}
+
+permissions:
+  contents: read
+
+env:
+  # The hub is checked out beside the caller's code so its actions and scripts
+  # can be used as local paths. detect-stack prunes this directory, otherwise
+  # every project would "detect" the hub's own test fixtures.
+  HUB_DIR: .ci-hub
+  HUB_REPO: arielamzallag2003-beep/ci-hub
+
+jobs:
+  # ---------------------------------------------------------------------------
+  detect:
+    name: Detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      stacks: ${{ steps.d.outputs.stacks }}
+      has_cpp: ${{ steps.d.outputs.has_cpp }}
+      cpp_build_system: ${{ steps.d.outputs.cpp_build_system }}
+      cpp_root: ${{ steps.d.outputs.cpp_root }}
+      has_dotnet: ${{ steps.d.outputs.has_dotnet }}
+      dotnet_project: ${{ steps.d.outputs.dotnet_project }}
+      has_codeql: ${{ steps.d.outputs.has_codeql }}
+      codeql_languages: ${{ steps.d.outputs.codeql_languages }}
+      engine: ${{ steps.d.outputs.engine }}
+      reasons: ${{ steps.d.outputs.reasons }}
+      os_json: ${{ steps.matrix.outputs.os_json }}
+      os_mode: ${{ steps.matrix.outputs.mode }}
+      docs_only: ${{ steps.docs.outputs.docs_only }}
+    steps:
+      - name: Check out the project
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # Pull requests need history to diff against the base branch for the
+          # docs-only check. Everything else takes the cheap shallow clone.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          persist-credentials: false
+
+      - name: Check out the CI hub
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.HUB_REPO }}
+          # job_workflow_sha is the commit of THIS reusable workflow file, so
+          # the hub's scripts always match the version the project pinned.
+          ref: ${{ github.job_workflow_sha }}
+          path: ${{ env.HUB_DIR }}
+          persist-credentials: false
+
+      - name: Fingerprint the project
+        id: d
+        uses: ./.ci-hub/.github/actions/detect-stack
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          override-file: ${{ inputs.override-file }}
+
+      - name: Decide the OS matrix
+        id: matrix
+        env:
+          REQUESTED: ${{ inputs.os-matrix }}
+          DETECTED: ${{ steps.d.outputs.os_matrix }}
+        run: |
+          mode="$REQUESTED"
+          [ -z "$mode" ] && mode="$DETECTED"
+          if [ "$mode" = "auto" ]; then
+            case "${{ github.ref }}" in
+              refs/heads/main | refs/heads/master | refs/tags/*) mode="full" ;;
+              *) mode="linux" ;;
+            esac
+          fi
+          case "$mode" in
+            full) os_json='["ubuntu-latest","windows-latest","macos-latest"]' ;;
+            windows) os_json='["ubuntu-latest","windows-latest"]' ;;
+            *) mode="linux"; os_json='["ubuntu-latest"]' ;;
+          esac
+          echo "mode=$mode" >>"$GITHUB_OUTPUT"
+          echo "os_json=$os_json" >>"$GITHUB_OUTPUT"
+
+      - name: Check whether only documentation changed
+        id: docs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Skipping build jobs for a docs-only pull request is the cheapest
+          # win available. It is done here rather than with paths-ignore
+          # because paths-ignore leaves the required check pending forever.
+          docs_only=false
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ -n "$BASE_SHA" ]; then
+            changed="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null || true)"
+            if [ -n "$changed" ] && ! echo "$changed" |
+              grep -qvE '(\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|LICENSE|\.gitignore$)'; then
+              docs_only=true
+            fi
+          fi
+          echo "docs_only=$docs_only" >>"$GITHUB_OUTPUT"
+
+      - name: Summarise
+        env:
+          REASONS: ${{ steps.d.outputs.reasons }}
+        run: bash "$HUB_DIR/.github/scripts/summary-detect.sh"
+
+  # ---------------------------------------------------------------------------
+  hygiene:
+    name: Hygiene
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.HUB_REPO }}
+          ref: ${{ github.job_workflow_sha }}
+          path: ${{ env.HUB_DIR }}
+          persist-credentials: false
+      - name: Check repository hygiene
+        run: bash "$HUB_DIR/.github/scripts/hygiene.sh"
+
+  # ---------------------------------------------------------------------------
+  secrets-scan:
+    name: Secret scan
+    needs: detect
+    if: inputs.run-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # ---------------------------------------------------------------------------
+  deps-review:
+    name: Dependency review
+    needs: detect
+    # Pull requests only: the action compares a base and a head, so there is
+    # nothing for it to do on a push.
+    if: inputs.run-security && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
+  # ---------------------------------------------------------------------------
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    needs: detect
+    if: inputs.run-codeql && needs.detect.outputs.has_codeql == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.detect.outputs.codeql_languages) }}
+    # C/C++ is the one language here that needs a real compile, so it is the one
+    # that can fail for reasons unrelated to the code under review. It reports
+    # but does not block; every other language uses build-mode "none".
+    continue-on-error: ${{ matrix.language == 'c-cpp' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.language == 'c-cpp' && 'autobuild' || 'none' }}
+      - uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+        with:
+          category: /language:${{ matrix.language }}
+
+  # ---------------------------------------------------------------------------
+  cpp:
+    name: C++ (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.has_cpp == 'true' && needs.detect.outputs.docs_only != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    strategy:
+      # One run should surface every broken platform at once. Cancelling the
+      # siblings just means paying for a second run to learn the rest.
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.detect.outputs.os_json) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.HUB_REPO }}
+          ref: ${{ github.job_workflow_sha }}
+          path: ${{ env.HUB_DIR }}
+          persist-credentials: false
+      - uses: ./.ci-hub/.github/actions/cpp-build
+        with:
+          build-system: ${{ needs.detect.outputs.cpp_build_system }}
+          # cpp_root is relative to working-directory, so the two are joined.
+          source-dir: ${{ inputs.working-directory }}/${{ needs.detect.outputs.cpp_root }}
+          build-type: ${{ inputs.cmake-build-type }}
+          artifact-retention-days: ${{ inputs.artifact-retention-days }}
+
+  # ---------------------------------------------------------------------------
+  dotnet:
+    name: .NET (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.has_dotnet == 'true' && needs.detect.outputs.docs_only != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.detect.outputs.os_json) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.HUB_REPO }}
+          ref: ${{ github.job_workflow_sha }}
+          path: ${{ env.HUB_DIR }}
+          persist-credentials: false
+      - uses: ./.ci-hub/.github/actions/dotnet-build
+        with:
+          project: ${{ inputs.working-directory }}/${{ needs.detect.outputs.dotnet_project }}
+          dotnet-version: ${{ inputs.dotnet-version }}
+          artifact-retention-days: ${{ inputs.artifact-retention-days }}
+
+  # ---------------------------------------------------------------------------
+  report:
+    name: Report
+    needs: [detect, hygiene, secrets-scan, deps-review, codeql, cpp, dotnet]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.HUB_REPO }}
+          ref: ${{ github.job_workflow_sha }}
+          path: ${{ env.HUB_DIR }}
+          persist-credentials: false
+      - uses: ./.ci-hub/.github/actions/report
+        with:
+          needs-json: ${{ toJSON(needs) }}
+          stacks: ${{ needs.detect.outputs.stacks }}
+          reasons: ${{ needs.detect.outputs.reasons }}
+          os-mode: ${{ needs.detect.outputs.os_mode }}
+          docs-only: ${{ needs.detect.outputs.docs_only }}
+
+  # ---------------------------------------------------------------------------
+  ci-ok:
+    # The one required status check. It exists so that branch protection is
+    # identical in every repository regardless of stack, and so that a job
+    # skipped because the language is not present can never block a merge.
+    name: ci-ok
+    needs: [detect, hygiene, secrets-scan, deps-review, codeql, cpp, dotnet, report]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Gate
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # Only an actual failure is a failure. "skipped" is the normal result
+          # for a language the project does not use, and must stay green.
+          failed="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "failure") | .key')"
+          cancelled="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "cancelled") | .key')"
+          if [ -n "$failed" ]; then
+            echo "::error::CI failed in: $(echo "$failed" | tr '\n' ' ')"
+            {
+              echo "## ci-ok: failed"
+              echo
+              echo "These jobs failed:"
+              echo "$failed" | sed 's/^/- /'
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ -n "$cancelled" ]; then
+            echo "::warning::Cancelled: $(echo "$cancelled" | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "## ci-ok: passed" >>"$GITHUB_STEP_SUMMARY"

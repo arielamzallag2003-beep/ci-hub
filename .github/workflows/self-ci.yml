@@ -1,0 +1,26 @@
+name: Self CI
+
+# The hub eats its own cooking: it runs its own ci.yml against itself. If the
+# entrypoint is broken, this goes red before any project is affected.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+      actions: read

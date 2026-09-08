@@ -1,0 +1,123 @@
+name: E2E
+
+# Runs the real ci.yml against each fixture, so a change to the hub is proven
+# before any project can be affected by it.
+#
+# The empty and unity-like cases matter most: they must finish GREEN. If an
+# unsupported project ever goes red here, the central promise of this system -
+# that it works with any repository - has been broken.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  cpp-cmake:
+    name: "fixture: cpp-cmake"
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    with:
+      working-directory: tests/fixtures/cpp-cmake
+      # CodeQL for C/C++ needs a full compile and adds several minutes; the
+      # build itself is what these fixtures exist to prove.
+      run-codeql: false
+
+  cpp-make:
+    name: "fixture: cpp-make"
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    with:
+      working-directory: tests/fixtures/cpp-make
+      run-codeql: false
+
+  dotnet:
+    name: "fixture: dotnet"
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    with:
+      working-directory: tests/fixtures/dotnet
+      run-codeql: false
+
+  unity-like:
+    name: "fixture: unity-like"
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    with:
+      working-directory: tests/fixtures/unity-like
+      run-codeql: false
+
+  empty:
+    name: "fixture: empty"
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    with:
+      working-directory: tests/fixtures/empty
+      run-codeql: false
+
+  assert:
+    name: Assert fixture classifications
+    needs: [cpp-cmake, cpp-make, dotnet, unity-like, empty]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check what each fixture was classified as
+        env:
+          CPP_CMAKE: ${{ needs.cpp-cmake.outputs.stacks }}
+          CPP_MAKE: ${{ needs.cpp-make.outputs.stacks }}
+          DOTNET: ${{ needs.dotnet.outputs.stacks }}
+          UNITY: ${{ needs.unity-like.outputs.stacks }}
+          EMPTY: ${{ needs.empty.outputs.stacks }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          fail=0
+          check() {
+            if [ "$2" = "$3" ]; then
+              echo "  ok   $1 -> $2"
+            else
+              echo "::error::$1 was classified as '$2', expected '$3'"
+              fail=1
+            fi
+          }
+          check cpp-cmake  "$CPP_CMAKE" '["cpp"]'
+          check cpp-make   "$CPP_MAKE"  '["cpp"]'
+          check dotnet     "$DOTNET"    '["dotnet"]'
+          check unity-like "$UNITY"     '["unity"]'
+          check empty      "$EMPTY"     '["unknown"]'
+
+          # The green-for-unsupported promise, asserted rather than assumed.
+          for fixture in unity-like empty; do
+            result="$(echo "$RESULTS" | jq -r --arg f "$fixture" '.[$f].result')"
+            if [ "$result" != "success" ]; then
+              echo "::error::Fixture '$fixture' finished as '$result'. A project the hub cannot build must still pass."
+              fail=1
+            else
+              echo "  ok   $fixture finished green, as an unsupported project must"
+            fi
+          done
+
+          exit "$fail"

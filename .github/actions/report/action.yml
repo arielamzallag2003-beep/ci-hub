@@ -1,0 +1,46 @@
+name: Report
+description: >-
+  Aggregate every job result into the run summary, and mirror it as a single
+  updating pull request comment.
+
+inputs:
+  needs-json:
+    description: toJSON(needs) from the calling workflow.
+    required: true
+  stacks:
+    required: false
+    default: "[]"
+  reasons:
+    required: false
+    default: ""
+  os-mode:
+    required: false
+    default: linux
+  docs-only:
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Build the report
+      id: build
+      shell: bash
+      env:
+        NEEDS: ${{ inputs.needs-json }}
+        STACKS: ${{ inputs.stacks }}
+        REASONS: ${{ inputs.reasons }}
+        OS_MODE: ${{ inputs.os-mode }}
+        DOCS_ONLY: ${{ inputs.docs-only }}
+      run: bash "${{ github.action_path }}/report.sh"
+
+    # Forks receive a read-only token, so attempting to comment would fail the
+    # job for a reason that has nothing to do with the code under review.
+    - name: Comment on the pull request
+      if: >-
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.fork == false
+      uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2.9.4
+      with:
+        header: ci-hub-report
+        path: ${{ runner.temp }}/ci-report.md

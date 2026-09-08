@@ -1,0 +1,175 @@
+name: Release
+
+# The ONLY workflow in this hub that is allowed to write, and it writes exactly
+# one kind of thing: a GitHub Release attached to a tag that already exists.
+#
+# It does not create the tag. You do, with `git tag v1.2.3 && git push --tags`.
+# It does not commit, merge, or move any ref. It defaults to a draft release so
+# that publishing stays a deliberate human action.
+
+on:
+  workflow_call:
+    inputs:
+      draft:
+        description: >-
+          Create the release as a draft for you to review and publish. Defaults
+          to true so that a mistagged build is never public by accident.
+        type: boolean
+        required: false
+        default: true
+      prerelease:
+        type: boolean
+        required: false
+        default: false
+      os-matrix:
+        description: '"linux" or "full". Release binaries usually want "full".'
+        type: string
+        required: false
+        default: full
+      dotnet-version:
+        type: string
+        required: false
+        default: ""
+      cmake-build-type:
+        type: string
+        required: false
+        default: Release
+      working-directory:
+        type: string
+        required: false
+        default: "."
+
+permissions:
+  contents: read
+
+env:
+  HUB_DIR: .ci-hub
+  HUB_REPO: arielamzallag2003-beep/ci-hub
+
+jobs:
+  verify:
+    name: Verify the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      os_json: ${{ steps.tag.outputs.os_json }}
+    steps:
+      - name: Check the ref is a version tag
+        id: tag
+        run: |
+          ref="${{ github.ref }}"
+          case "$ref" in
+            refs/tags/*) ;;
+            *) echo "::error::release.yml must be called from a tag push, got '$ref'."; exit 1 ;;
+          esac
+          version="${ref#refs/tags/}"
+          if ! echo "$version" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag '$version' is not semantic (expected vMAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          case "${{ inputs.os-matrix }}" in
+            full) echo 'os_json=["ubuntu-latest","windows-latest","macos-latest"]' >>"$GITHUB_OUTPUT" ;;
+            *) echo 'os_json=["ubuntu-latest"]' >>"$GITHUB_OUTPUT" ;;
+          esac
+
+  build:
+    name: Build ${{ matrix.os }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.verify.outputs.os_json) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.HUB_REPO }}
+          ref: ${{ github.job_workflow_sha }}
+          path: ${{ env.HUB_DIR }}
+          persist-credentials: false
+
+      - id: d
+        uses: ./.ci-hub/.github/actions/detect-stack
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Build C++ release binaries
+        if: steps.d.outputs.has_cpp == 'true'
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}/${{ steps.d.outputs.cpp_root }}
+        run: |
+          if [ "${{ steps.d.outputs.cpp_build_system }}" = "cmake" ]; then
+            cmake -S . -B build -DCMAKE_BUILD_TYPE="${{ inputs.cmake-build-type }}"
+            cmake --build build --config "${{ inputs.cmake-build-type }}" --parallel
+          else
+            make
+          fi
+
+      - name: Publish .NET release binaries
+        if: steps.d.outputs.has_dotnet == 'true'
+        shell: bash
+        run: |
+          dotnet publish "${{ inputs.working-directory }}/${{ steps.d.outputs.dotnet_project }}" \
+            --configuration Release -o "$RUNNER_TEMP/publish"
+
+      - name: Collect artifacts
+        id: collect
+        shell: bash
+        run: bash "$HUB_DIR/.github/scripts/collect-artifacts.sh" \
+          "${{ needs.verify.outputs.version }}" \
+          "${{ inputs.working-directory }}/${{ steps.d.outputs.cpp_root }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.collect.outputs.produced == 'true'
+        with:
+          name: release-${{ runner.os }}
+          path: ${{ runner.temp }}/dist
+          retention-days: 7
+          if-no-files-found: ignore
+
+  publish:
+    name: Create the release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The one place in this hub with write access. Scoped to this job alone.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.HUB_REPO }}
+          ref: ${{ github.job_workflow_sha }}
+          path: ${{ env.HUB_DIR }}
+          persist-credentials: false
+
+      - name: Download built artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+        continue-on-error: true
+
+      - name: Generate the changelog and checksums
+        id: notes
+        run: bash "$HUB_DIR/.github/scripts/release-notes.sh" "${{ needs.verify.outputs.version }}"
+
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ needs.verify.outputs.version }}
+          name: ${{ needs.verify.outputs.version }}
+          body_path: ${{ runner.temp }}/RELEASE_NOTES.md
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          files: ${{ runner.temp }}/release-files/*
+          fail_on_unmatched_files: false

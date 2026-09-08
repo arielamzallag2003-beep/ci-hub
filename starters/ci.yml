@@ -1,0 +1,31 @@
+# Copy to .github/workflows/ci.yml in your project.
+#
+# This file is IDENTICAL for every technology. C++, C#, Python, Rust, Unity,
+# Unreal, an empty repo - all of them use exactly this. The hub works out what
+# your project is at run time; you never edit this per language.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    uses: arielamzallag2003-beep/ci-hub/.github/workflows/ci.yml@v1
+    # A reusable workflow can only narrow permissions, never widen them, so
+    # the grants it needs have to be made here by the caller.
+    permissions:
+      contents: read
+      security-events: write # CodeQL results
+      pull-requests: write # the single updating PR comment
+      actions: read

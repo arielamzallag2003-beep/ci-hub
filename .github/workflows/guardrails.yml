@@ -1,0 +1,69 @@
+name: Guardrails
+
+# Checks the hub against its own promises before any project can be affected
+# by a change to it. If this workflow is red, do not tag a release.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guardrails-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  safety:
+    name: Safety guarantees
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: bash .github/scripts/guardrails.sh
+
+  lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      # actionlint catches expression and syntax errors that GitHub only
+      # reports at run time, when a project is already depending on us.
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+      # zizmor audits workflows for known security anti-patterns.
+      - name: zizmor
+        run: |
+          pipx install zizmor==1.5.2
+          zizmor --persona=regular .github/workflows/
+
+      - name: shellcheck
+        run: |
+          shellcheck -S warning \
+            .github/scripts/*.sh \
+            .github/actions/*/*.sh \
+            tests/*.sh
+
+  detect-tests:
+    name: Detection snapshot tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      # These encode the specific misclassifications the detector was designed
+      # to avoid. A regression here means a real project gets the wrong CI.
+      - run: bash tests/run-detect-tests.sh
