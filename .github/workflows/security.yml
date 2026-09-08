@@ -28,9 +28,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: arielamzallag2003-beep/ci-hub
+          ref: ${{ github.job_workflow_sha }}
+          path: .ci-hub
+          persist-credentials: false
+      - name: gitleaks (full history)
+        run: bash .ci-hub/.github/scripts/gitleaks.sh git
 
   scorecard:
     name: OpenSSF Scorecard
