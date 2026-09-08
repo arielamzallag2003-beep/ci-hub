@@ -41,7 +41,10 @@ jobs:
       - name: actionlint
         run: |
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
-          ./actionlint -color
+          # github.job_workflow_sha is a documented context property, but
+          # actionlint 1.7.7 does not yet know about it. Ignoring the message
+          # is narrower than disabling the whole expression check.
+          ./actionlint -color             -ignore 'property "job_workflow_sha" is not defined'
 
       # zizmor audits workflows for known security anti-patterns.
       - name: zizmor

@@ -14,10 +14,15 @@ FAIL=0
 
 # expect <fixture> <field> <value>
 expect() {
-  local fixture="$1" field="$2" want="$3" got
-  got="$(cd "$HERE/fixtures/$fixture" &&
-    DETECT_ACTION_PATH="$ACTION" bash "$ACTION/detect.sh" . .github/ci.yml 2>/dev/null |
-    grep -E "^${field}=" | head -1 | cut -d= -f2-)"
+  local fixture="$1" field="$2" want="$3" got out
+  # detect.sh writes to $GITHUB_OUTPUT when it is set, and falls back to stdout
+  # otherwise. On a runner it is ALWAYS set, so give it a real file and read
+  # that - reading stdout silently returned nothing here.
+  out="$(mktemp)"
+  (cd "$HERE/fixtures/$fixture" &&
+    GITHUB_OUTPUT="$out" DETECT_ACTION_PATH="$ACTION"       bash "$ACTION/detect.sh" . .github/ci.yml >/dev/null 2>&1)
+  got="$(grep -E "^${field}=" "$out" | head -1 | cut -d= -f2-)"
+  rm -f "$out"
   if [ "$got" = "$want" ]; then
     PASS=$((PASS + 1))
     printf '  ok   %-12s %-18s = %s\n' "$fixture" "$field" "$got"
