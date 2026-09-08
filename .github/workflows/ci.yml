@@ -134,7 +134,7 @@ jobs:
           mode="$REQUESTED"
           [ -z "$mode" ] && mode="$DETECTED"
           if [ "$mode" = "auto" ]; then
-            case "${{ github.ref }}" in
+            case "$GITHUB_REF" in
               refs/heads/main | refs/heads/master | refs/tags/*) mode="full" ;;
               *) mode="linux" ;;
             esac
@@ -156,7 +156,7 @@ jobs:
           # win available. It is done here rather than with paths-ignore
           # because paths-ignore leaves the required check pending forever.
           docs_only=false
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ -n "$BASE_SHA" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ]; then
             changed="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null || true)"
             if [ -n "$changed" ] && ! echo "$changed" |
               grep -qvE '(\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|LICENSE|\.gitignore$)'; then

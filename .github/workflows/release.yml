@@ -57,8 +57,10 @@ jobs:
     steps:
       - name: Check the ref is a version tag
         id: tag
+        env:
+          OS_MATRIX: ${{ inputs.os-matrix }}
         run: |
-          ref="${{ github.ref }}"
+          ref="$GITHUB_REF"
           case "$ref" in
             refs/tags/*) ;;
             *) echo "::error::release.yml must be called from a tag push, got '$ref'."; exit 1 ;;
@@ -69,7 +71,7 @@ jobs:
             exit 1
           fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
-          case "${{ inputs.os-matrix }}" in
+          case "$OS_MATRIX" in
             full) echo 'os_json=["ubuntu-latest","windows-latest","macos-latest"]' >>"$GITHUB_OUTPUT" ;;
             *) echo 'os_json=["ubuntu-latest"]' >>"$GITHUB_OUTPUT" ;;
           esac
@@ -103,10 +105,13 @@ jobs:
         if: steps.d.outputs.has_cpp == 'true'
         shell: bash
         working-directory: ${{ inputs.working-directory }}/${{ steps.d.outputs.cpp_root }}
+        env:
+          BUILD_SYSTEM: ${{ steps.d.outputs.cpp_build_system }}
+          BUILD_TYPE: ${{ inputs.cmake-build-type }}
         run: |
-          if [ "${{ steps.d.outputs.cpp_build_system }}" = "cmake" ]; then
-            cmake -S . -B build -DCMAKE_BUILD_TYPE="${{ inputs.cmake-build-type }}"
-            cmake --build build --config "${{ inputs.cmake-build-type }}" --parallel
+          if [ "$BUILD_SYSTEM" = "cmake" ]; then
+            cmake -S . -B build -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+            cmake --build build --config "$BUILD_TYPE" --parallel
           else
             make
           fi
@@ -114,16 +119,18 @@ jobs:
       - name: Publish .NET release binaries
         if: steps.d.outputs.has_dotnet == 'true'
         shell: bash
+        env:
+          PROJECT: ${{ inputs.working-directory }}/${{ steps.d.outputs.dotnet_project }}
         run: |
-          dotnet publish "${{ inputs.working-directory }}/${{ steps.d.outputs.dotnet_project }}" \
-            --configuration Release -o "$RUNNER_TEMP/publish"
+          dotnet publish "$PROJECT" --configuration Release -o "$RUNNER_TEMP/publish"
 
       - name: Collect artifacts
         id: collect
         shell: bash
-        run: bash "$HUB_DIR/.github/scripts/collect-artifacts.sh" \
-          "${{ needs.verify.outputs.version }}" \
-          "${{ inputs.working-directory }}/${{ steps.d.outputs.cpp_root }}"
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          CPP_DIR: ${{ inputs.working-directory }}/${{ steps.d.outputs.cpp_root }}
+        run: bash "$HUB_DIR/.github/scripts/collect-artifacts.sh" "$VERSION" "$CPP_DIR"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.collect.outputs.produced == 'true'
@@ -161,7 +168,9 @@ jobs:
 
       - name: Generate the changelog and checksums
         id: notes
-        run: bash "$HUB_DIR/.github/scripts/release-notes.sh" "${{ needs.verify.outputs.version }}"
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: bash "$HUB_DIR/.github/scripts/release-notes.sh" "$VERSION"
 
       - name: Create the GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
