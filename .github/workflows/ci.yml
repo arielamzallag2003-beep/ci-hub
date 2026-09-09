@@ -105,7 +105,12 @@ jobs:
         with:
           # Pull requests need history to diff against the base branch for the
           # docs-only check. Everything else takes the cheap shallow clone.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          #
+          # The values are QUOTED on purpose. GitHub treats the number 0 as
+          # falsy, so `cond && 0 || 1` collapses to 1 even when cond is true -
+          # the shallow clone then hides the base commit, the diff fails, and
+          # the docs-only saving silently never happens.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           persist-credentials: false
 
       - name: Check out the CI hub
@@ -157,10 +162,16 @@ jobs:
           # because paths-ignore leaves the required check pending forever.
           docs_only=false
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ]; then
-            changed="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null || true)"
+            if ! changed="$(git diff --name-only "$BASE_SHA"...HEAD 2>&1)"; then
+              # Say so rather than silently treating it as "not docs-only".
+              # A swallowed failure here costs a full build on every docs PR.
+              echo "::warning::Could not diff against the base commit, so the docs-only check was skipped. Is the checkout shallow?"
+              changed=""
+            fi
             if [ -n "$changed" ] && ! echo "$changed" |
               grep -qvE '(\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|LICENSE|\.gitignore$)'; then
               docs_only=true
+              echo "Only documentation changed - build jobs will be skipped."
             fi
           fi
           echo "docs_only=$docs_only" >>"$GITHUB_OUTPUT"
