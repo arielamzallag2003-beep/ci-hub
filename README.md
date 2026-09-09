@@ -381,6 +381,7 @@ branch ruleset (Settings → Rules → Rulesets → New branch ruleset):
 | Restrict deletions | on |
 | Block force pushes | on |
 | Require status checks | on, source **GitHub Actions** |
+| **Require a pull request** | **on**, with required approvals **0** — see below |
 | Require branches up to date | **off** — it forces a rebase and full re-run on every Dependabot merge |
 
 The five required checks, typed exactly:
@@ -393,21 +394,29 @@ Assert fixture classifications
 ci / ci-ok
 ```
 
-Two traps:
+Three traps, each of which produces a `main` you cannot merge into:
 
+- **Status checks without the pull-request rule make the branch permanently
+  unmergeable.** Without it, GitHub evaluates the *commit the merge would
+  produce* — which is brand new and has no checks recorded against it — rather
+  than the pull request's. Every merge method fails, even with all five checks
+  green. The two rules only work together.
 - **Never require a check whose name contains `${{ ... }}`.** GitHub's picker
   offers entries like `ci / C++ (${{ matrix.os }})` — that is the name recorded
   for a *skipped* job. When the job actually runs the name resolves to
   `ci / C++ (ubuntu-latest)`, so the literal version never reports and merges
   hang pending forever.
-- **Set required approvals to 0** if you add the pull-request rule. GitHub does
-  not let you approve your own pull request, so any higher number makes a
-  solo repository unmergeable.
+- **Set required approvals to 0.** GitHub does not let you approve your own
+  pull request, so any higher number makes a solo repository unmergeable.
 
-Requiring status checks means a commit must have passed them *before* it can
-land, so direct pushes to `main` stop working. Work becomes: branch → push →
-pull request → merge when green. That is the intended trade: a broken `main`
-here reaches every project the moment the `v1` tag moves.
+Together these mean direct pushes to `main` stop working. Work becomes: branch
+→ push → pull request → merge when green. That is the intended trade: a broken
+`main` here reaches every project the moment the `v1` tag moves.
+
+If you would rather keep pushing directly, the coherent alternative is to drop
+**both** the status-check and pull-request rules and keep only Restrict
+deletions and Block force pushes. You still get the protection that matters
+against losing work. What does not work is status checks on their own.
 
 The ruleset targets **branches only**, so moving the `v1` tag still works.
 
