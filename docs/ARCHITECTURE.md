@@ -82,8 +82,12 @@ The cost is one extra checkout per job, and one subtlety: `.ci-hub` sits inside
 the workspace, so `detect-stack` prunes it. Without that, every project would
 detect the hub's own test fixtures.
 
-Renaming the hub repository requires updating the `HUB_REPO` constant in
-`ci.yml` and `release.yml`.
+Renaming the hub, or forking it, means repointing every self-reference — and
+there are more of them than just `HUB_REPO`. The complete list is in the
+README's [Using this in your own
+account](../README.md#using-this-in-your-own-account) section. Missing
+`HUB_REPO` in particular is silent: a fork's projects keep checking out and
+running the *original* hub's code.
 
 ## Why formatting is never applied
 
