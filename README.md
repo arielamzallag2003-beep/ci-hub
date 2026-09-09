@@ -10,17 +10,17 @@ One CI/CD system for every repository you own — whatever it's written in.
 ---
 
 Instead of a hand-written pipeline in every repository, each project gets a
-15-line file that calls this hub. The hub works out what the project is at run
-time and runs only what makes sense.
+15-line file that calls this hub. The hub detects the project's stack at run
+time and runs only the jobs that apply to it.
 
 - **Works with any project.** C++, C#, Python, Rust, Node, Gradle, Unity,
-  Unreal, Godot, or an empty repository. A stack it cannot build still finishes
-  green, with the reason printed — never a red badge for something that isn't
-  your fault.
+  Unreal, Godot, or an empty repository. A stack it cannot build finishes green
+  with the reason stated in the summary.
 - **Never writes to your repository.** No commits, no tags, no merges, no
-  force-pushes. Enforced by a workflow, not by good intentions.
+  force-pushes. [`guardrails.yml`](.github/workflows/guardrails.yml) fails the
+  hub's own CI if that stops being true.
 - **Fix it once.** A bug fixed here reaches every repository pinned to `@v1` on
-  its next run. No fan-out pull requests.
+  its next run, with no pull request per repository.
 
 ## Contents
 
@@ -44,8 +44,7 @@ time and runs only what makes sense.
 
 ## Vocabulary
 
-Four GitHub terms this README uses constantly. If they're already familiar,
-skip ahead.
+Four GitHub terms used throughout.
 
 | Term | Meaning here |
 | --- | --- |
@@ -61,8 +60,7 @@ pwsh ./scripts/bootstrap-repo.ps1 -Repo my-project          # dry run, shows the
 pwsh ./scripts/bootstrap-repo.ps1 -Repo my-project -Apply   # opens a pull request
 ```
 
-Merge the pull request. That's the whole adoption. There is no per-language
-configuration step.
+Merge the pull request. There is no per-language configuration step.
 
 ## How it works
 
@@ -81,11 +79,10 @@ flowchart LR
 `detect` fingerprints the repository — build systems, engines, analysis
 languages — and every other job is conditional on what it found.
 
-Everything funnels into **`ci-ok`**, and that is the only status check you ever
-make required in a project. It fails when a job *failed*; a job that was
-*skipped* because your project has no C# in it keeps it green. That's what lets
-one identical branch-protection rule work across every repository you own,
-including the ones CI can't build.
+Everything funnels into **`ci-ok`**, the only status check a project ever makes
+required. It fails when a job *failed*; a job *skipped* because the project has
+no C# in it keeps it green. One branch-protection rule therefore works
+unchanged across every repository, including those the hub cannot build.
 
 ### The jobs, in order
 
@@ -155,11 +152,10 @@ including the ones CI can't build.
 | **Unreal** | hygiene, secret scan — **build skipped, needs the engine** | green |
 | **Empty / unrecognised** | hygiene, secret scan — **stated as such** | green |
 
-The bottom three rows are the point of the design. They pass, and the summary
-says exactly why nothing was built.
+The bottom three rows pass, and the summary states why nothing was built.
 
-`clang-format` runs only if the project has a `.clang-format` file — the hub
-does not invent a style for you.
+`clang-format` runs only if the project has a `.clang-format` file; there is no
+default style.
 
 ## The caller file
 
@@ -193,7 +189,7 @@ Copies of all three callers live in [`starters/`](starters/):
 
 | File | Copy to | Purpose |
 | --- | --- | --- |
-| [`starters/ci.yml`](starters/ci.yml) | `.github/workflows/ci.yml` | The above. Every project wants this. |
+| [`starters/ci.yml`](starters/ci.yml) | `.github/workflows/ci.yml` | The caller file above |
 | [`starters/release.yml`](starters/release.yml) | `.github/workflows/release.yml` | Draft release when you push a `v*.*.*` tag |
 | [`starters/security.yml`](starters/security.yml) | `.github/workflows/security.yml` | Weekly full-history scan + Scorecard |
 | [`starters/ci-override-example.yml`](starters/ci-override-example.yml) | `.github/ci.yml` | Only when detection guesses wrong |
@@ -334,16 +330,15 @@ hub. If one stops being true, the hub's own CI goes red.
 | require a secret | `ci.yml` declares none, so fork PRs have nothing to leak |
 | create a release tag | `release.yml` only *reads* the tag you pushed |
 
-The one exception is deliberate: when **you** push a `v*.*.*` tag,
-`release.yml` builds artifacts and creates a **draft** release for you to
-publish. It still creates no tag and makes no commit.
+One exception: when **you** push a `v*.*.*` tag, `release.yml` builds artifacts
+and creates a **draft** release for you to publish. It creates no tag and makes
+no commit.
 
 ### Why formatting produces a patch instead of a commit
 
-A bot that reformats your code is a bot that writes to your repository, and
-once it can do that the guarantee above is gone. So formatters run in check
-mode, the diff they *would* have made is uploaded as a `format.patch`
-artifact, and you apply it yourself:
+Applying a format fix would require write access, which would break the first
+guarantee above. Formatters therefore run in check mode and upload the diff
+they would have made as a `format.patch` artifact, which you apply yourself:
 
 ```bash
 git apply format.patch
@@ -369,7 +364,7 @@ More detail: [docs/COST.md](docs/COST.md).
 
 ## Protecting the hub itself
 
-Projects require a single check called `ci-ok`. **The hub is the exception**,
+Projects require a single check called `ci-ok`. The hub needs five instead,
 because its own checks come from three workflows rather than one call. Create a
 branch ruleset (Settings → Rules → Rulesets → New branch ruleset):
 
@@ -410,14 +405,14 @@ Three traps, each of which produces a `main` you cannot merge into:
 - **Set required approvals to 0.** GitHub does not let you approve your own
   pull request, so any higher number makes a solo repository unmergeable.
 
-Together these mean direct pushes to `main` stop working. Work becomes: branch
-→ push → pull request → merge when green. That is the intended trade: a broken
-`main` here reaches every project the moment the `v1` tag moves.
+Together these stop direct pushes to `main`: work becomes branch → push → pull
+request → merge when green. The cost is one branch per change; what it buys is
+that a broken `main` cannot reach every project the next time the `v1` tag
+moves.
 
-If you would rather keep pushing directly, the coherent alternative is to drop
-**both** the status-check and pull-request rules and keep only Restrict
-deletions and Block force pushes. You still get the protection that matters
-against losing work. What does not work is status checks on their own.
+To keep pushing directly instead, drop **both** the status-check and
+pull-request rules and keep Restrict deletions and Block force pushes. Status
+checks on their own do not work.
 
 The ruleset targets **branches only**, so moving the `v1` tag still works.
 
