@@ -276,7 +276,11 @@ jobs:
   codeql:
     name: CodeQL (${{ matrix.language }})
     needs: detect
-    if: inputs.run-codeql && needs.detect.outputs.has_codeql == 'true'
+    # Also skipped for a docs-only change: analysing source that did not
+    # change finds nothing, and CodeQL is by far the most expensive job here.
+    if: >-
+      inputs.run-codeql && needs.detect.outputs.has_codeql == 'true' &&
+      needs.detect.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

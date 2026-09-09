@@ -46,7 +46,7 @@ too and a build artifact older than a week is rarely the one you want.
 
 | Scenario | Approximate Linux minutes |
 | --- | --- |
-| Docs-only pull request | under 1 |
+| Docs-only pull request | about 1 |
 | Unity / Unreal / empty repository | 1-2 (hygiene and secret scan only) |
 | Small .NET solution | 2-4 |
 | Small CMake project | 2-4 |
