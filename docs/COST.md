@@ -55,5 +55,9 @@ too and a build artifact older than a week is rarely the one you want.
 
 ## Watching the meter
 
-Your `gh` token does not carry the `user` scope, so the billing API is not
-reachable from the CLI. Check **Settings → Billing → Actions** on github.com.
+Check **Settings → Billing → Actions** on github.com.
+
+The CLI route needs a token carrying the `user` scope, which the default
+`gh auth login` does not grant; add it with
+`gh auth refresh -h github.com -s user` if you want to query billing from a
+script.
