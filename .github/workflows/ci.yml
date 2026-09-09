@@ -225,7 +225,38 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+
+      # dependency-review-action hard-fails with "Dependency review is not
+      # supported on this repository" when the dependency graph is switched
+      # off. That is a repository setting, not a property of the code under
+      # review, so failing the build for it would be exactly the unrelated red
+      # badge this hub exists to prevent. Probe first and skip loudly instead.
+      - name: Check whether the dependency graph is available
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/compare/${BASE}...${HEAD}" >/dev/null 2>&1; then
+            echo "supported=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "supported=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::Dependency review skipped - the dependency graph is not enabled for this repository."
+            {
+              echo "## Dependency review"
+              echo
+              echo "**Skipped.** The dependency graph is not enabled for this"
+              echo "repository, so GitHub cannot diff its dependencies."
+              echo
+              echo "Enable it under **Settings -> Code security -> Dependency graph**"
+              echo "to have pull requests checked for known-vulnerable dependencies."
+              echo "Everything else in this run was unaffected."
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        if: steps.probe.outputs.supported == 'true'
         with:
           fail-on-severity: high
           comment-summary-in-pr: never
