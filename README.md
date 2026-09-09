@@ -358,7 +358,8 @@ accordingly:
 - **Linux only** unless you ask for `full`.
 - **Concurrency cancellation** on PR branches, so a force-push doesn't leave
   three stale runs burning minutes.
-- **Docs-only pull requests skip the build jobs** entirely (~30 seconds).
+- **Docs-only pull requests skip the build and CodeQL jobs**, leaving only
+  hygiene and secret scanning — about a minute instead of ten.
 - **`timeout-minutes` on every job**, so a hung job can't eat six hours.
 - **Caching** for ccache and NuGet.
 - **`fail-fast: false`**, so one run reports every broken platform instead of
